@@ -141,8 +141,8 @@ def train_one_step(model, xs, ys):
     with tf.GradientTape() as tape:
         y_preds = model(xs)    # 模型前向传播计算预测值
         loss = tf.keras.losses.MSE(ys, y_preds)   #计算损失函数
-    grads = tape.gradient(loss, model.w)    # 计算损失函数对模型参数w的梯度
-    optimizer.apply_gradients([(grads, model.w)])    # 更新模型参数
+    grads = tape.gradient(loss, [model.w, model.b])    # 计算损失函数对模型参数w和b的梯度
+    optimizer.apply_gradients(zip(grads, [model.w, model.b]))    # 更新模型参数w和b
     return loss # 返回模型的预测结果，即模型对输入数据 xs 的输出
 
 
@@ -197,6 +197,6 @@ plt.ylabel("y")
 plt.title("Linear Regression") # 图表标题
 # 虚线网格，半透明灰色
 plt.grid(True, linestyle="--", alpha=0.7, color="gray")
-plt.legend(["train", "test", "pred"])  # 添加图例，元素依次对应
+plt.legend(["train", "pred"])  # 添加图例，元素依次对应
 plt.tight_layout()  # 自动调整布局
 plt.show()# 显示图形
