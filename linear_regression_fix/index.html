@@ -70,17 +70,27 @@
               
                 <h1 id="_1">线性回归代码缺陷修复报告</h1>
 <h2 id="_2">一、概述</h2>
-<p>本次针对原始线性回归代码 <code>linear_regression_fix</code> 存在的<strong>逻辑Bug、绘图错误</strong>进行定点修复，解决两大核心问题：<strong>偏置项b未参与梯度更新</strong>、<strong>图例标签与曲线数量不匹配</strong>，同时规范代码结构与可视化展示效果。</p>
+<p>本次针对原始线性回归代码 <code>linear_regression-tf2.0.py</code> 存在的<strong>逻辑Bug、绘图错误</strong>进行定点修复，解决两大核心问题：<strong>偏置项b未参与梯度更新</strong>、<strong>图例标签与曲线数量不匹配</strong>，同时规范代码结构与可视化展示效果。</p>
+<p>核心改进涵盖以下三个方面：</p>
+<ol>
+<li>梯度计算完整性（同时对权重w和偏置b求梯度）</li>
+<li>参数更新正确性（使用zip配对更新所有可训练参数）</li>
+<li>可视化规范性（图例标签与绘制曲线严格对应）</li>
+</ol>
+<hr />
 <h2 id="_3">二、原始代码存在问题</h2>
 <h3 id="21-bugb">2.1 严重逻辑Bug：偏置项b从未更新</h3>
 <h4 id="_4">原关键代码</h4>
-<pre><code class="language-python">with tf.GradientTape() as tape:
-    y_preds = model(xs)
-    loss = tf.keras.losses.MSE(ys, y_preds)
-# 仅对权重w求梯度，忽略偏置b
-grads = tape.gradient(loss, model.w)
-# 仅更新w，b始终为初始0值
-optimizer.apply_gradients([(grads, model.w)])
+<pre><code class="language-python">@tf.function
+def train_one_step(model, xs, ys):
+    with tf.GradientTape() as tape:
+        y_preds = model(xs)
+        loss = tf.keras.losses.MSE(ys, y_preds)
+    # 仅对权重w求梯度，忽略偏置b
+    grads = tape.gradient(loss, model.w)
+    # 仅更新w，b始终为初始0值
+    optimizer.apply_gradients([(grads, model.w)])
+    return loss
 </code></pre>
 <h4 id="_5">问题说明</h4>
 <ol>
@@ -89,45 +99,219 @@ optimizer.apply_gradients([(grads, model.w)])
 <li>偏置项 <code>b</code> 全程固定初始值，<strong>没有参与任何训练迭代</strong>；</li>
 <li>模型丧失截距拟合能力，只能拟合过原点直线，拟合精度大幅下降。</li>
 </ol>
+<h4 id="_6">数学分析</h4>
+<p>线性回归的标准形式为：</p>
+<pre><code class="language-text">y = w·x + b
+</code></pre>
+<p>其中：
+- <code>w</code> 是权重（斜率），控制直线的倾斜程度
+- <code>b</code> 是偏置（截距），控制直线在y轴上的位置</p>
+<p>梯度下降的更新规则为：</p>
+<pre><code class="language-text">w_new = w_old - lr * ∂L/∂w
+b_new = b_old - lr * ∂L/∂b
+</code></pre>
+<p>原始代码只执行了第一个更新，导致 <code>b</code> 始终为初始值0。</p>
+<h4 id="_7">影响分析</h4>
+<p>设真实数据关系为 <code>y = 2x + 3</code>：</p>
+<table>
+<thead>
+<tr>
+<th>x</th>
+<th>真实y</th>
+<th>无偏置模型预测 (y=2x)</th>
+<th>误差</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>5</td>
+<td>2</td>
+<td>3</td>
+</tr>
+<tr>
+<td>5</td>
+<td>13</td>
+<td>10</td>
+<td>3</td>
+</tr>
+<tr>
+<td>10</td>
+<td>23</td>
+<td>20</td>
+<td>3</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>绝对误差恒为3（即偏置值）</li>
+<li>相对误差在小x值时巨大（x=1时为60%）</li>
+<li>模型无法捕捉数据的真实分布</li>
+</ul>
 <h3 id="22-bug">2.2 可视化Bug：图例标签数量不匹配</h3>
-<h4 id="_6">原问题</h4>
-<p>绘图仅绘制<strong>训练集、预测曲线</strong>2条线条，但图例设置3个标签，出现多余无效图例，界面展示不规范。</p>
+<h4 id="_8">原问题代码</h4>
+<pre><code class="language-python">plt.plot(o_x, o_y, &quot;ro&quot;, markersize=3)      # 绘制训练数据点
+plt.plot(o_x_test, y_test_preds, &quot;k&quot;)        # 绘制预测曲线
+plt.legend([&quot;train&quot;, &quot;test&quot;, &quot;pred&quot;])        # 3个标签，但只有2条曲线
+</code></pre>
+<h4 id="_9">问题说明</h4>
+<ul>
+<li>绘图仅绘制<strong>训练集数据点、预测曲线</strong>2条线条</li>
+<li>但图例设置3个标签 <code>["train", "test", "pred"]</code></li>
+<li>出现多余无效图例，界面展示不规范</li>
+<li>读者会寻找不存在的"test"曲线，造成理解混淆</li>
+</ul>
 <h3 id="23">2.3 其他隐性问题</h3>
 <ul>
 <li>损失函数未做均值归一化，数值波动偏大；</li>
-<li>代码梯度求解与参数更新写法不规范，扩展性差。</li>
+<li>代码梯度求解与参数更新写法不规范，扩展性差；</li>
+<li>学习率设置为0.1，对于Adam优化器来说偏高。</li>
 </ul>
-<h2 id="_7">三、代码修复方案</h2>
+<hr />
+<h2 id="_10">三、代码修复方案</h2>
 <h3 id="31">3.1 修复偏置项梯度更新</h3>
-<h4 id="_8">修复后代码</h4>
-<pre><code class="language-python">with tf.GradientTape() as tape:
-    y_preds = model(xs)
-    loss = tf.reduce_mean(tf.keras.losses.MSE(ys, y_preds))
-# 同时对w、b求梯度
-grads = tape.gradient(loss, [model.w, model.b])
-# 同时配对更新w和b
-optimizer.apply_gradients(zip(grads, [model.w, model.b]))
+<h4 id="_11">修复后代码</h4>
+<pre><code class="language-python">@tf.function
+def train_one_step(model, xs, ys):
+    with tf.GradientTape() as tape:
+        y_preds = model(xs)
+        loss = tf.reduce_mean(tf.keras.losses.MSE(ys, y_preds))
+    # 同时对w、b求梯度
+    grads = tape.gradient(loss, [model.w, model.b])
+    # 同时配对更新w和b
+    optimizer.apply_gradients(zip(grads, [model.w, model.b]))
+    return loss
 </code></pre>
-<h4 id="_9">修复要点</h4>
+<h4 id="_12">修复要点</h4>
 <ol>
 <li>将求梯度对象改为列表 <code>[model.w, model.b]</code>，同时求解两个参数梯度；</li>
 <li>使用 <code>zip</code> 将梯度与参数一一绑定，同步更新权重与偏置；</li>
 <li>增加 <code>tf.reduce_mean</code> 对损失做均值处理，训练更平稳。</li>
 </ol>
-<h3 id="32">3.2 修复图例标签不匹配</h3>
-<h4 id="_10">修复方式</h4>
-<p>原多余测试集标签删除，图例严格与绘制线条数量对应：</p>
-<pre><code class="language-python">plt.legend([&quot;train&quot;, &quot;pred&quot;])
+<h4 id="tensorflow">TensorFlow梯度计算机制</h4>
+<pre><code class="language-python"># 单参数梯度
+grads = tape.gradient(loss, model.w)  # 返回单个梯度张量
+
+# 多参数梯度
+grads = tape.gradient(loss, [model.w, model.b])  # 返回梯度列表
+
+# 参数更新
+optimizer.apply_gradients(zip(grads, [model.w, model.b]))
+# zip将梯度与参数配对：[(grad_w, w), (grad_b, b)]
 </code></pre>
-<h2 id="b">四、原理补充：偏置项b的作用</h2>
+<h3 id="32">3.2 修复图例标签不匹配</h3>
+<h4 id="_13">修复方式</h4>
+<p>原多余测试集标签删除，图例严格与绘制线条数量对应：</p>
+<pre><code class="language-python">plt.plot(o_x, o_y, &quot;ro&quot;, markersize=3)      # 绘制训练数据点
+plt.plot(o_x_test, y_test_preds, &quot;k&quot;)        # 绘制预测曲线
+plt.legend([&quot;train&quot;, &quot;pred&quot;])                # 2个标签，与曲线对应
+</code></pre>
+<hr />
+<h2 id="_14">四、改进后完整代码结构</h2>
+<h3 id="41">4.1 模型定义</h3>
+<pre><code class="language-python">class LinearModel(Model):
+    &quot;&quot;&quot;线性回归模型，实现 y = w·x + b&quot;&quot;&quot;
+
+    def __init__(self, ndim):
+        super(LinearModel, self).__init__()
+        # 权重参数：形状 [ndim, 1]
+        self.w = tf.Variable(
+            shape=[ndim, 1],
+            initial_value=tf.random.uniform(
+                [ndim, 1], minval=-0.1, maxval=0.1, dtype=tf.float32
+            ),
+            trainable=True,
+            name=&quot;weight&quot;
+        )
+        # 偏置参数：形状 [1]
+        self.b = tf.Variable(
+            initial_value=tf.zeros([1], dtype=tf.float32),
+            trainable=True,
+            name=&quot;bias&quot;
+        )
+
+    @tf.function
+    def call(self, x):
+        y = tf.squeeze(tf.matmul(x, self.w), axis=1) + self.b
+        return y
+</code></pre>
+<h3 id="42">4.2 基函数变换</h3>
+<p>文件中定义了三种基函数，用于将原始输入映射到高维特征空间：</p>
 <ol>
-<li>线性回归标准模型：$y = w x + b$</li>
+<li><strong>恒等基函数</strong>：直接返回输入，适用于线性关系</li>
+<li><strong>多项式基函数</strong>：将x映射为[x, x², x³, ...]，捕捉多项式关系</li>
+<li><strong>高斯基函数</strong>：将x映射为一组高斯分布特征，捕捉非线性关系</li>
+</ol>
+<pre><code class="language-python">def gaussian_basis(x, feature_num=10):
+    &quot;&quot;&quot;高斯基函数：将输入x映射为一组高斯分布特征&quot;&quot;&quot;
+    centers = np.linspace(0, 25, feature_num)  # 高斯中心点
+    width = 1.0 * (centers[1] - centers[0])    # 高斯宽度
+    x = np.expand_dims(x, axis=1)
+    x = np.concatenate([x] * feature_num, axis=1)
+    out = (x - centers) / width
+    ret = np.exp(-0.5 * out ** 2)
+    return ret
+</code></pre>
+<h3 id="43">4.3 数据流</h3>
+<pre><code class="language-text">输入: x (原始数据)
+  -&gt; load_data(): 读取数据文件
+  -&gt; basis_func(): 基函数变换 (高斯/多项式/恒等)
+  -&gt; 添加偏置列: [1, phi1, phi2, ...]
+  -&gt; model(xs): 前向传播 y = w·x + b
+  -&gt; loss = MSE(ys, y_preds): 计算损失
+  -&gt; tape.gradient(): 计算梯度
+  -&gt; optimizer.apply_gradients(): 更新参数
+</code></pre>
+<hr />
+<h2 id="b">五、原理补充：偏置项b的作用</h2>
+<h3 id="51">5.1 线性回归标准模型</h3>
+<pre><code class="language-text">y = w x + b
+</code></pre>
+<ul>
 <li>$w$：权重，控制曲线斜率；</li>
 <li>$b$：偏置/截距，控制曲线上下平移；</li>
-<li>若无b且不更新，模型强制曲线过原点，无法适配带偏移的真实数据分布；</li>
-<li>偏置项是可训练参数，必须纳入梯度计算和参数更新流程，否则模型表达能力缺失。</li>
-</ol>
-<h2 id="_11">五、修复前后效果对比</h2>
+</ul>
+<h3 id="52">5.2 偏置项的几何意义</h3>
+<table>
+<thead>
+<tr>
+<th>偏置值b</th>
+<th>直线位置</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>b = 0</td>
+<td>通过原点</td>
+<td>数据天然满足y(0)=0</td>
+</tr>
+<tr>
+<td>b &gt; 0</td>
+<td>y轴截距为正</td>
+<td>数据存在正向偏移</td>
+</tr>
+<tr>
+<td>b &lt; 0</td>
+<td>y轴截距为负</td>
+<td>数据存在负向偏移</td>
+</tr>
+</tbody>
+</table>
+<h3 id="53">5.3 偏置项的数学意义</h3>
+<p>在梯度下降优化中，偏置项的梯度计算为：</p>
+<pre><code class="language-text">∂L/∂b = ∂L/∂y · ∂y/∂b = ∂L/∂y · 1
+</code></pre>
+<p>这意味着偏置项的梯度等于损失函数对预测值的梯度，是优化过程中不可或缺的一部分。</p>
+<h3 id="54">5.4 无偏置模型的局限性</h3>
+<p>若无b且不更新，模型强制曲线过原点，无法适配带偏移的真实数据分布：</p>
+<ul>
+<li>房价预测：即使面积为0，也可能有基础价格（土地价值）</li>
+<li>温度预测：即使时间为0，也可能有基础温度</li>
+<li>销量预测：即使广告投入为0，也可能有基础销量</li>
+</ul>
+<hr />
+<h2 id="_15">六、修复前后效果对比</h2>
 <table>
 <thead>
 <tr>
@@ -157,20 +341,51 @@ optimizer.apply_gradients(zip(grads, [model.w, model.b]))
 <td>收敛慢、误差大</td>
 <td>收敛更快、拟合误差更小</td>
 </tr>
+<tr>
+<td>梯度计算</td>
+<td>只计算w的梯度</td>
+<td>同时计算w和b的梯度</td>
+</tr>
+<tr>
+<td>参数更新</td>
+<td>只更新w</td>
+<td>同时更新w和b</td>
+</tr>
 </tbody>
 </table>
-<h2 id="_12">六、总结</h2>
+<p>改进前：
+<img alt="alt text" src="../66ac269e273fd879f5e79b47b7ff245b.png" /></p>
+<p>改进后：
+<img alt="alt text" src="../7c7485db939607441d98e254078883b4.png" /></p>
+<hr />
+<h2 id="_16">七、总结</h2>
 <ol>
 <li>核心修复：补全<strong>偏置项b的梯度求解与参数更新</strong>，解决模型结构残缺问题；</li>
 <li>可视化修复：精简图例标签，做到绘图与图例严格对应；</li>
 <li>规范代码：损失增加均值处理、梯度更新写法标准化，便于后续扩展多项式、高斯基函数回归；</li>
 <li>关键结论：线性回归中 <strong>权重w和偏置b必须同时参与训练</strong>，缺一不可。</li>
 </ol>
+<h3 id="_17">可继续改进的方向</h3>
+<ul>
+<li><strong>学习率调度</strong>：添加学习率衰减策略，如指数衰减或余弦退火</li>
+<li><strong>正则化</strong>：添加L1/L2正则化，防止过拟合</li>
+<li><strong>早停机制</strong>：监控验证集损失，自动停止训练</li>
+<li><strong>模型评估</strong>：添加R²、MAE等更多评估指标</li>
+<li><strong>数据增强</strong>：对训练数据添加噪声，提升泛化能力</li>
+</ul>
 <hr />
-<p>改进前：
-<img alt="alt text" src="../66ac269e273fd879f5e79b47b7ff245b.png" /></p>
-<p>改进后：
-<img alt="alt text" src="../7c7485db939607441d98e254078883b4.png" /></p>
+<h2 id="_18">八、使用方式</h2>
+<pre><code class="language-bash">cd src/chap02_linear_regression
+python linear_regression-tf2.0.py
+</code></pre>
+<p>程序会自动加载 <code>train.txt</code> 和 <code>test.txt</code> 数据文件，训练完成后输出训练集和测试集的预测标准差，并显示拟合结果图。</p>
+<h3 id="_19">相关文件</h3>
+<ul>
+<li><strong>原始文件</strong>：<code>src/chap02_linear_regression/linear_regression-tf2.0.py</code></li>
+<li><strong>改进版文件</strong>：<code>src/chap02_linear_regression/linear_regression-tf2.0-improved.py</code></li>
+<li><strong>NumPy版本</strong>：<code>src/chap02_linear_regression/linear_regression.py</code></li>
+</ul>
+<hr />
               
             </div>
           </div><footer>
