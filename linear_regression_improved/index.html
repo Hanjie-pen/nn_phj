@@ -5,7 +5,7 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <link rel="shortcut icon" href="../img/favicon.ico" />
-    <title>线性回归代码改进报告 - 神经网络</title>
+    <title>Keras Sequential CNN 改进报告 - 神经网络</title>
     <link rel="stylesheet" href="../css/theme.css" />
     <link rel="stylesheet" href="../css/theme_extra.css" />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
@@ -13,7 +13,7 @@
     
       <script>
         // Current page data
-        var mkdocs_page_name = "\u7ebf\u6027\u56de\u5f52\u4ee3\u7801\u6539\u8fdb\u62a5\u544a";
+        var mkdocs_page_name = "Keras Sequential CNN \u6539\u8fdb\u62a5\u544a";
         var mkdocs_page_input_path = "linear_regression_improved.md";
         var mkdocs_page_url = null;
       </script>
@@ -58,7 +58,7 @@
         <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
   <ul class="wy-breadcrumbs">
     <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
-      <li class="breadcrumb-item active">线性回归代码改进报告</li>
+      <li class="breadcrumb-item active">Keras Sequential CNN 改进报告</li>
     <li class="wy-breadcrumbs-aside">
           <a href="https://github.com/OpenHUTB/nn/edit/master/docs/linear_regression_improved.md" class="icon icon-github"> Edit on GitHub</a>
     </li>
@@ -68,275 +68,279 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
             <div class="section" itemprop="articleBody">
               
-                <h1 id="_1">线性回归代码改进报告</h1>
-<h2 id="_2">一、概述</h2>
-<p>本次改进基于原 <code>linear_regression-tf2.0.py</code> 代码，针对其存在的多个问题进行了系统性优化。改进后的代码为 <code>linear_regression-tf2.0-improved.py</code>。</p>
-<p>核心改进涵盖以下五个方面：</p>
+                <h1 id="keras-sequential-cnn">Keras Sequential CNN 改进报告</h1>
+<h2 id="_1">一、概述</h2>
+<p>本次改进基于原 <code>tutorial_mnist_conv-keras-sequential.py</code> 代码，针对其存在的多个问题进行了系统性优化。</p>
+<p>核心改进涵盖以下六个方面：</p>
 <ol>
-<li>参数初始化策略（Xavier 初始化）</li>
-<li>梯度计算与参数更新（修复偏置未更新的 Bug）</li>
-<li>学习率调度策略（指数衰减）</li>
-<li>基函数自适应（数据驱动的中心点）</li>
-<li>评估指标扩展（引入 R² 决定系数）</li>
+<li>数据利用效率（使用全部训练样本）</li>
+<li>模型架构（添加 BatchNormalization）</li>
+<li>正则化策略（添加 Dropout）</li>
+<li>激活函数选择（tanh -&gt; relu）</li>
+<li>学习率策略（初始学习率 + ReduceLROnPlateau 调度）</li>
+<li>训练策略（增加 epoch、EarlyStopping、验证集监控）</li>
 </ol>
 <hr />
-<h2 id="_3">二、原代码问题分析</h2>
-<h3 id="21">2.1 参数初始化不合理</h3>
+<h2 id="_2">二、原代码问题分析</h2>
+<h3 id="21">2.1 数据利用不足</h3>
 <p><strong>原代码：</strong></p>
-<pre><code class="language-python">self.w = tf.Variable(
-    shape=[ndim, 1],
-    initial_value=tf.random.uniform(
-        [ndim, 1], minval=-0.1, maxval=0.1, dtype=tf.float32
+<pre><code class="language-python">ds = ds.take(20000).shuffle(20000).batch(100)
+</code></pre>
+<p><strong>问题：</strong>
+- MNIST 训练集共有 60000 个样本，但只使用了 20000 个（33%）
+- 浪费了 40000 个高质量标注数据，模型无法充分学习各类数字的特征
+- 尤其对于书写风格差异较大的数字（如 4 和 9、3 和 8），样本不足会导致分类边界模糊</p>
+<p><strong>改进：</strong></p>
+<pre><code class="language-python">ds = ds.shuffle(60000).batch(100)
+</code></pre>
+<p>使用全部 60000 个训练样本，让模型能够见到更多样的书写风格，提升泛化能力。</p>
+<h3 id="22-batchnormalization">2.2 无 BatchNormalization</h3>
+<p><strong>问题：</strong>
+- 卷积层后没有归一化处理，每层输入分布随训练不断变化（内部协变量偏移，Internal Covariate Shift）
+- 导致训练不稳定，收敛速度慢
+- 后层需要不断适应前层输出分布的变化，浪费了模型的学习 capacity</p>
+<p><strong>改进代码：</strong></p>
+<pre><code class="language-python">Conv2D(32, (5, 5), activation='relu', padding='same'),
+layers.BatchNormalization(),  # 新增
+
+Conv2D(64, (5, 5), activation='relu', padding='same'),
+layers.BatchNormalization(),  # 新增
+</code></pre>
+<p><strong>BatchNormalization 的作用：</strong>
+1. 对每个 mini-batch 的特征进行归一化（减均值、除标准差）
+2. 通过可学习的缩放参数 γ 和偏移参数 β 恢复表达能力
+3. 稳定每层输入分布，使各层可以独立学习
+4. 具有轻微的正则化效果（因为每个样本的归一化依赖于同 batch 的其他样本）</p>
+<p><strong>效果：</strong>
+- 训练收敛速度提升约 30-50%
+- 允许使用更大的学习率而不会发散
+- 减少对参数初始化的敏感性</p>
+<h3 id="23-dropout">2.3 无 Dropout 正则化</h3>
+<p><strong>问题：</strong>
+- 模型没有任何正则化手段，容易过拟合训练数据
+- 全连接层有 3136 x 128 + 128 x 10 = 402,816 个参数，参数量远大于训练样本数
+- 训练准确率可能达到 100% 但测试准确率明显偏低</p>
+<p><strong>改进代码：</strong></p>
+<pre><code class="language-python">Flatten(),
+Dropout(0.25),          # 新增：展平后丢弃 25%
+
+layers.Dense(128, activation='relu'),
+Dropout(0.5),           # 新增：全连接后丢弃 50%
+
+layers.Dense(10, activation='softmax')
+</code></pre>
+<p><strong>Dropout 的原理：</strong>
+- 训练时以指定概率随机将神经元输出置零
+- 迫使网络学习更加鲁棒的特征，不依赖于特定神经元
+- 相当于训练了指数级数量的子网络并进行集成
+- 测试时使用全部神经元，但输出乘以保留概率进行缩放</p>
+<p><strong>两处 Dropout 使用不同概率的原因：</strong>
+- 展平后 Dropout(0.25)：特征图展平后维度较高（3136维），适度丢弃即可
+- 全连接后 Dropout(0.5)：全连接层参数密集，需要更强的正则化</p>
+<h3 id="24-dense-tanh">2.4 Dense 层使用 tanh 激活</h3>
+<p><strong>原代码：</strong></p>
+<pre><code class="language-python">layers.Dense(128, activation='tanh'),
+</code></pre>
+<p><strong>问题：</strong>
+- tanh 的输出范围是 [-1, 1]，在输入绝对值较大时梯度接近于 0（梯度饱和区）
+- 深层网络中梯度需要逐层相乘，饱和区的微小梯度会导致梯度消失
+- tanh 涉及指数运算，计算开销比 ReLU 大</p>
+<p><strong>改进：</strong></p>
+<pre><code class="language-python">layers.Dense(128, activation='relu'),
+</code></pre>
+<p><strong>ReLU 的优势：</strong>
+- 正区间梯度恒为 1，不会出现梯度消失
+- 计算简单：<code>max(0, x)</code>，只需一次比较操作
+- 稀疏激活：约 50% 的神经元输出为 0，减少计算量
+- 是目前深度学习中最常用的激活函数</p>
+<h3 id="25">2.5 学习率过小且无调度</h3>
+<p><strong>原代码：</strong></p>
+<pre><code class="language-python">optimizer = optimizers.Adam(0.0001)
+</code></pre>
+<p><strong>问题：</strong>
+- 学习率 0.0001 过小，在仅有的 5 个 epoch 内模型远远无法收敛
+- 固定学习率无法适应训练不同阶段的需求：初期需要大步长快速下降，后期需要小步长精细调整</p>
+<p><strong>改进代码：</strong></p>
+<pre><code class="language-python">optimizer = optimizers.Adam(0.001)
+
+callbacks = [
+    keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss', factor=0.5, patience=2, min_lr=1e-6
     ),
-    trainable=True,
-    name=&quot;weight&quot;
-)
+]
 </code></pre>
-<p><strong>问题：</strong>
-- 权重初始化为固定范围 <code>[-0.1, 0.1)</code> 的均匀分布
-- 该范围与输入维度无关，当特征维度较高时，前向传播的激活值方差会逐层累积放大或缩小
-- 固定范围初始化没有考虑网络规模，导致深层网络或高维特征时训练不稳定</p>
-<h3 id="22-bias">2.2 偏置项（Bias）从未被更新！</h3>
+<p><strong>ReduceLROnPlateau 策略：</strong>
+- 监控验证集 loss，当连续 <code>patience</code>（2）个 epoch 不下降时触发
+- 触发时将学习率乘以 <code>factor</code>（0.5），即减半
+- 学习率下限为 <code>min_lr</code>（1e-6），防止过小
+- 这是一种自适应策略：loss 还在下降时保持当前学习率，停滞时自动调小</p>
+<p><strong>学习率变化示例：</strong></p>
+<pre><code>Epoch  1-5:  lr = 0.001     (初始学习率)
+Epoch  6-7:  lr = 0.001     (val_loss 仍在下降)
+Epoch  8:    val_loss 停滞
+Epoch  9:    lr = 0.0005    (衰减 50%)
+Epoch 10:    val_loss 继续下降
+...
+</code></pre>
+<h3 id="26">2.6 训练轮数不足且无早停</h3>
 <p><strong>原代码：</strong></p>
-<pre><code class="language-python">with tf.GradientTape() as tape:
-    y_preds = model(xs)
-    loss = tf.keras.losses.MSE(ys, y_preds)
-grads = tape.gradient(loss, model.w)       # 仅对 w 求梯度
-optimizer.apply_gradients([(grads, model.w)])  # 仅更新 w
+<pre><code class="language-python">model.fit(train_ds, epochs=5)
+model.evaluate(test_ds, batch_size=100)
 </code></pre>
 <p><strong>问题：</strong>
-- 模型定义了 <code>self.w</code> 和 <code>self.b</code> 两个参数
-- 前向传播使用了 <code>y = w·x + b</code>
-- 但反向传播 <code>tape.gradient(loss, model.w)</code> 只计算了对 <code>w</code> 的梯度
-- <code>apply_gradients</code> 也只更新了 <code>w</code>
-- <strong>结论：偏置 <code>b</code> 永远保持初始值 <code>0</code>，从未参与训练！</strong></p>
-<p>这是一个严重的逻辑错误，限制了模型的拟合能力。线性回归的偏置项代表数据的截距，不更新偏置意味着模型对原点附近的数据拟合能力大打折扣。</p>
-<h3 id="23">2.3 学习率固定且偏高</h3>
-<p><strong>原代码：</strong></p>
-<pre><code class="language-python">optimizer = optimizers.Adam(0.1)
-</code></pre>
-<p><strong>问题：</strong>
-- 学习率固定为 0.1，在训练全程保持不变
-- 在训练初期，0.1 可能合适，能较快收敛
-- 但在训练后期，模型接近最优解时，固定 0.1 的学习率会导致参数在最优点附近来回震荡，无法精细收敛
-- 没有学习率衰减机制，难以同时保证快速收敛和精细调节</p>
-<h3 id="24">2.4 基函数中心点硬编码</h3>
-<p><strong>原代码：</strong></p>
-<pre><code class="language-python">centers = np.linspace(0, 25, feature_num)
-</code></pre>
-<p><strong>问题：</strong>
-- 高斯核函数的中心点固定在 <code>[0, 25]</code> 区间
-- 如果训练数据的范围不在 <code>[0, 25]</code> 内（例如数据集中在 <code>[10, 20]</code>），大量中心点会落在数据范围之外
-- 落在数据范围之外的高斯基函数输出接近于 0，成为无效特征，浪费了模型容量
-- 当数据分布变化时，需要手动修改代码中的区间范围，缺乏通用性</p>
-<h3 id="25">2.5 评估指标单一</h3>
-<p><strong>问题：</strong>
-- 原代码只使用标准差（Std）评估模型，信息量不足
-- 标准差缺少归一化，无法判断模型相对于数据本身的解释程度</p>
-<hr />
-<h2 id="_4">三、改进内容详解</h2>
-<h3 id="31-xavier">3.1 Xavier 参数初始化</h3>
+- 5 个 epoch 对于 MNIST 严重不足，模型远未收敛
+- 没有验证集监控，无法判断是否过拟合
+- 没有早停机制，训练时间固定，可能浪费也可能不够
+- <code>model.evaluate</code> 的 <code>batch_size=100</code> 与数据集已有的 batch 冲突</p>
 <p><strong>改进代码：</strong></p>
-<pre><code class="language-python">limit = np.sqrt(6.0 / ndim)
-self.w = tf.Variable(
-    shape=[ndim, 1],
-    initial_value=tf.random.uniform(
-        [ndim, 1], minval=-limit, maxval=limit, dtype=tf.float32
-    ),
-    trainable=True,
-    name=&quot;weight&quot;,
+<pre><code class="language-python">model.fit(train_ds, epochs=15, validation_data=test_ds, callbacks=callbacks)
+model.evaluate(test_ds)
+</code></pre>
+<p><strong>EarlyStopping 回调：</strong></p>
+<pre><code class="language-python">keras.callbacks.EarlyStopping(
+    monitor='val_loss', patience=3, restore_best_weights=True
 )
-</code></pre>
-<p><strong>原理：</strong>
-- Xavier 初始化（Glorot 初始化）的核心思想是：<strong>让每一层输出的方差尽可能等于输入方差</strong>
-- 对于均匀分布版本的 Xavier 初始化，范围由 <code>±√(6 / n_in)</code> 确定
-- 其中 <code>n_in</code> 是输入维度，在本代码中即基函数变换后的特征数
-- 这样初始化后，无论特征维度多高，前向传播的激活值方差都保持稳定</p>
-<p><strong>效果：</strong>
-- 训练初期 loss 下降更平滑，不会出现梯度爆炸或消失
-- 对高维特征（如 feature_num=50 时）更加鲁棒
-- 收敛速度整体提升</p>
-<h3 id="32">3.2 修复偏置梯度更新</h3>
-<p><strong>改进代码：</strong></p>
-<pre><code class="language-python">with tf.GradientTape() as tape:
-    y_preds = model(xs)
-    loss = tf.reduce_mean(tf.keras.losses.MSE(ys, y_preds))
-grads = tape.gradient(loss, [model.w, model.b])
-optimizer.apply_gradients(zip(grads, [model.w, model.b]))
-</code></pre>
-<p><strong>两点修复：</strong></p>
-<ol>
-<li><strong>对 <code>[model.w, model.b]</code> 同时求梯度</strong> — <code>tape.gradient(loss, [model.w, model.b])</code> 返回两个梯度</li>
-<li><strong>对 <code>[model.w, model.b]</code> 同时更新</strong> — <code>apply_gradients</code> 接收梯度-参数对列表</li>
-</ol>
-<p><strong>效果：</strong>
-- 偏置 <code>b</code> 终于能够正常学习
-- 模型截距项能够自适应数据分布
-- 整体拟合能力显著提升</p>
-<h3 id="33">3.3 指数衰减学习率</h3>
-<p><strong>改进代码：</strong></p>
-<pre><code class="language-python">lr_schedule = optimizers.schedules.ExponentialDecay(
-    initial_learning_rate=0.05,
-    decay_steps=2000,
-    decay_rate=0.96,
-    staircase=True,
-)
-optimizer = optimizers.Adam(learning_rate=lr_schedule)
-</code></pre>
-<p><strong>策略设计：</strong>
-- 初始学习率设为 0.05，相比原版的 0.1 更温和
-- 每 2000 步学习率乘以 0.96，即每 2000 步衰减 4%
-- <code>staircase=True</code> 表示阶梯式衰减（非连续衰减），便于观察各阶段效果
-- 10000 步后学习率约为 0.04，能够在训练后期精细调优</p>
-<p><strong>效果：</strong>
-- 训练初期快速下降，loss 从 ~3.5 快速降至 ~0.1
-- 训练后期 loss 曲线平滑，无明显震荡
-- 最终 loss 可降至 0.05-0.06，远优于固定学习率的结果</p>
-<h3 id="34">3.4 基函数自适应中心点</h3>
-<p><strong>改进代码：</strong></p>
-<pre><code class="language-python">def gaussian_basis(x, feature_num=10):
-    x_min, x_max = x.min(), x.max()
-    centers = np.linspace(x_min - 0.5, x_max + 0.5, feature_num)
-    width = 1.0 * (centers[1] - centers[0])
-    x = np.expand_dims(x, axis=1)
-    x = np.concatenate([x] * feature_num, axis=1)
-    out = (x - centers) / width
-    return np.exp(-0.5 * out ** 2)
-</code></pre>
-<p><strong>改进思路：</strong>
-- 自动计算训练数据的实际范围 <code>[x_min, x_max]</code>
-- 在 <code>[x_min - 0.5, x_max + 0.5]</code> 范围内均匀放置 feature_num 个高斯中心点
-- 两端各扩展 0.5 个单位，避免边缘数据点离最近的高斯中心太远</p>
-<p><strong>效果：</strong>
-- 无论数据分布范围如何，高斯中心点都能覆盖数据区域
-- 每个高斯基函数都有数据点落在有效响应区域内，没有浪费的基函数
-- 代码具有通用性，适用于任意范围的数据集</p>
-<h3 id="35">3.5 扩展评估指标</h3>
-<p><strong>改进代码：</strong></p>
-<pre><code class="language-python">def evaluate(ys, ys_pred):
-    ys = ys.numpy() if hasattr(ys, 'numpy') else ys
-    ys_pred = ys_pred.numpy() if hasattr(ys_pred, 'numpy') else ys_pred
-    std = np.std(ys - ys_pred)
-    ss_res = np.sum((ys - ys_pred) ** 2)
-    ss_tot = np.sum((ys - np.mean(ys)) ** 2)
-    r2 = 1 - ss_res / (ss_tot + 1e-10)
-    return std, r2
-</code></pre>
-<p><strong>新增 R² 决定系数：</strong>
-- R² 衡量模型对数据方差的解释程度
-- 取值 <code>[0, 1]</code>，越接近 1 表示拟合越好
-- <code>R² = 1 - SS_res / SS_tot</code>，其中 <code>SS_res</code> 是残差平方和，<code>SS_tot</code> 是总平方和
-- 添加 <code>1e-10</code> 防止除零</p>
-<p><strong>效果：</strong>
-- R² 提供归一化的评估视角，不受数据量纲影响
-- 配合标准差使用，可以全面评估模型性能</p>
-<h3 id="36">3.6 训练轮数增加</h3>
-<p><strong>改进代码：</strong></p>
-<pre><code class="language-python">EPOCHS = 10000
-PRINT_INTERVAL = 500
 </code></pre>
 <ul>
-<li>训练轮数从 1000 提升至 10000</li>
-<li>配合衰减学习率，10000 轮能够让模型充分收敛</li>
-<li>打印间隔调整为 500 步，输出信息适中</li>
+<li>监控验证集 loss，连续 3 个 epoch 不下降时停止训练</li>
+<li><code>restore_best_weights=True</code>：停止后恢复验证集上表现最好的权重</li>
+<li>避免过拟合：如果模型在第 10 个 epoch 开始过拟合，会在第 13 个 epoch 自动停止</li>
 </ul>
 <hr />
-<h2 id="_5">四、可视化改进</h2>
-<p><strong>改进代码：</strong></p>
-<pre><code class="language-python">x_smooth = np.linspace(
-    min(o_x.min(), o_x_test.min()),
-    max(o_x.max(), o_x_test.max()),
-    500,
-)
-phi0_s = np.expand_dims(np.ones_like(x_smooth), axis=1)
-phi1_s = gaussian_basis(x_smooth)
-xs_smooth = np.concatenate([phi0_s, phi1_s], axis=1).astype(np.float32)
-y_smooth = predict(model, xs_smooth)
-plt.plot(x_smooth, y_smooth, &quot;k-&quot;, linewidth=2, label=&quot;prediction&quot;)
+<h2 id="_3">三、改进后完整模型架构</h2>
+<pre><code class="language-python">model = keras.Sequential([
+    Conv2D(32, (5, 5), activation='relu', padding='same'),
+    layers.BatchNormalization(),          # 稳定训练
+    MaxPooling2D(pool_size=2, strides=2), # 28x28 -&gt; 14x14
+
+    Conv2D(64, (5, 5), activation='relu', padding='same'),
+    layers.BatchNormalization(),          # 稳定训练
+    MaxPooling2D(pool_size=2, strides=2), # 14x14 -&gt; 7x7
+
+    Flatten(),                            # 7x7x64 = 3136
+    Dropout(0.25),                        # 轻度正则化
+
+    layers.Dense(128, activation='relu'),
+    Dropout(0.5),                         # 强正则化
+
+    layers.Dense(10, activation='softmax')
+])
 </code></pre>
-<p><strong>改进点：</strong>
-- 原图仅绘制测试集离散点的预测值，连接起来呈折线
-- 改进后生成 500 个均匀分布的平滑点，绘制连续光滑的预测曲线
-- 曲线覆盖训练集和测试集的完整范围，视觉效果更好
-- 同时绘制训练集和测试集数据点，便于对比</p>
+<p><strong>数据流：</strong></p>
+<pre><code>输入: (batch, 28, 28, 1)
+  -&gt; Conv2D(32) + BN + ReLU: (batch, 28, 28, 32)
+  -&gt; MaxPool: (batch, 14, 14, 32)
+  -&gt; Conv2D(64) + BN + ReLU: (batch, 14, 14, 64)
+  -&gt; MaxPool: (batch, 7, 7, 64)
+  -&gt; Flatten: (batch, 3136)
+  -&gt; Dropout(0.25): (batch, 3136)
+  -&gt; Dense(128) + ReLU: (batch, 128)
+  -&gt; Dropout(0.5): (batch, 128)
+  -&gt; Dense(10) + Softmax: (batch, 10)
+</code></pre>
 <hr />
-<h2 id="_6">五、结果对比</h2>
+<h2 id="_4">四、改进效果对比</h2>
 <table>
 <thead>
 <tr>
 <th>指标</th>
-<th>原代码</th>
-<th>改进代码</th>
+<th>原版</th>
+<th>改进版</th>
+<th>改进原因</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>训练 Std</td>
-<td>—</td>
-<td><strong>0.245</strong></td>
+<td>训练样本数</td>
+<td>20000</td>
+<td>60000</td>
+<td>充分利用数据</td>
 </tr>
 <tr>
-<td>训练 R²</td>
-<td>—</td>
-<td><strong>≈0.997</strong></td>
+<td>BatchNormalization</td>
+<td>无</td>
+<td>每个卷积层后</td>
+<td>稳定训练、加速收敛</td>
+</tr>
+<tr>
+<td>Dropout</td>
+<td>无</td>
+<td>0.25 + 0.5</td>
+<td>防止过拟合</td>
+</tr>
+<tr>
+<td>Dense 激活函数</td>
+<td>tanh</td>
+<td>relu</td>
+<td>缓解梯度消失</td>
+</tr>
+<tr>
+<td>初始学习率</td>
+<td>0.0001</td>
+<td>0.001</td>
+<td>加速收敛</td>
+</tr>
+<tr>
+<td>学习率调度</td>
+<td>无</td>
+<td>ReduceLROnPlateau</td>
+<td>自适应调整</td>
 </tr>
 <tr>
 <td>训练轮数</td>
-<td>1000</td>
-<td>10000</td>
+<td>5</td>
+<td>最多 15（早停）</td>
+<td>充分训练</td>
 </tr>
 <tr>
-<td>学习率</td>
-<td>固定 0.1</td>
-<td>0.05 → 0.04 指数衰减</td>
+<td>验证集监控</td>
+<td>无</td>
+<td>每个 epoch</td>
+<td>检测过拟合</td>
 </tr>
 <tr>
-<td>偏置更新</td>
-<td>❌ 未更新</td>
-<td>✅ 正确更新</td>
+<td>早停机制</td>
+<td>无</td>
+<td>patience=3</td>
+<td>防止过拟合</td>
 </tr>
 <tr>
-<td>初始化</td>
-<td>固定 [-0.1, 0.1]</td>
-<td>Xavier 自适应</td>
-</tr>
-<tr>
-<td>高斯中心</td>
-<td>硬编码 [0, 25]</td>
-<td>数据自适应</td>
+<td>预期测试准确率</td>
+<td>~98%</td>
+<td>~99.2%+</td>
+<td>综合提升</td>
 </tr>
 </tbody>
 </table>
-<blockquote>
-<p>注：原代码因偏置未更新、学习率偏高等问题，loss 无法收敛到较低水平。改进后训练 loss 从约 3.5 降至约 0.05。</p>
-</blockquote>
 <hr />
-<h2 id="_7">六、总结与展望</h2>
-<h3 id="_8">改进总结</h3>
+<p>改进前：
+<img alt="alt text" src="../66ac269e273fd879f5e79b47b7ff245b.png" /></p>
+<p>改进后：
+<img alt="alt text" src="../7c7485db939607441d98e254078883b4.png" /></p>
+<h2 id="_5">五、总结</h2>
 <p>本次改进针对原代码中的 6 个核心问题进行了修复和优化：</p>
 <ol>
-<li><strong>修复了偏置项不更新的严重 Bug</strong> — 模型参数 w 和 b 同时参与训练</li>
-<li><strong>采用 Xavier 初始化</strong> — 参数初始范围与输入维度匹配，训练更稳定</li>
-<li><strong>引入指数衰减学习率</strong> — 兼顾初期快速收敛和后期精细调优</li>
-<li><strong>基函数中心点自适应</strong> — 根据数据范围自动调整，提高通用性</li>
-<li><strong>增加 R² 评估指标</strong> — 多维度评估模型性能</li>
-<li><strong>优化可视化</strong> — 平滑预测曲线，更清晰展现拟合效果</li>
+<li><strong>数据利用</strong>：从 20000 扩展到 60000 训练样本，数据利用率从 33% 提升到 100%</li>
+<li><strong>BatchNormalization</strong>：每个卷积层后添加 BN，稳定训练过程，加速收敛</li>
+<li><strong>Dropout 正则化</strong>：两级 Dropout（0.25 和 0.5），有效防止过拟合</li>
+<li><strong>激活函数</strong>：tanh 替换为 relu，缓解梯度消失，加速训练</li>
+<li><strong>学习率策略</strong>：初始学习率 10 倍提升 + ReduceLROnPlateau 自适应调度</li>
+<li><strong>训练策略</strong>：EarlyStopping + 验证集监控，自动找到最佳训练时长</li>
 </ol>
-<h3 id="_9">可继续改进的方向</h3>
+<h3 id="_6">可继续改进的方向</h3>
 <ul>
-<li><strong>Mini-Batch 训练</strong>：当前使用全批量梯度下降，对于更大规模的数据集，可以采用小批量训练</li>
-<li><strong>早停机制（Early Stopping）</strong>：在验证集 loss 不再下降时自动停止训练，防止过拟合</li>
-<li><strong>正则化</strong>：引入 L2 正则化或 Dropout，进一步提升泛化能力</li>
-<li><strong>超参数搜索</strong>：使用网格搜索或贝叶斯优化寻找最优的 feature_num、初始学习率等超参数</li>
-<li><strong>TensorBoard</strong>：集成 TensorBoard 可视化训练过程中的 loss、学习率等指标的变化曲线</li>
+<li><strong>数据增强</strong>：添加随机旋转、平移、缩放等变换，进一步提升泛化能力</li>
+<li><strong>更深的网络</strong>：添加第三个卷积块，提取更高层特征</li>
+<li><strong>学习率预热</strong>：训练初期使用较小学习率逐步升到目标值，避免初始震荡</li>
+<li><strong>混合精度训练</strong>：使用 float16 加速训练（需要 GPU 支持）</li>
+<li><strong>模型集成</strong>：训练多个模型取平均，进一步提升准确率</li>
 </ul>
 <hr />
-<h2 id="_10">七、使用方式</h2>
-<pre><code class="language-bash"># 在项目目录中运行
-cd src/chap02_linear_regression
-python linear_regression-tf2.0-improved.py
+<h2 id="_7">六、使用方式</h2>
+<pre><code class="language-bash">cd src/chap05_CNN
+python tutorial_mnist_conv-keras-sequential.py
 </code></pre>
-<p>程序会自动加载 <code>train.txt</code> 和 <code>test.txt</code>，训练完成后输出评估指标并显示拟合曲线图。</p>
+<p>程序会自动下载 MNIST 数据集，训练完成后输出各 epoch 的训练和验证指标。</p>
               
             </div>
           </div><footer>
